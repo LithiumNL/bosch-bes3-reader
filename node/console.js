@@ -43,6 +43,7 @@ function argValue(name) {
 }
 
 const ACTIVE = process.argv.includes('--active');
+const OFFLINE = process.argv.includes('--offline');
 const captureArg = argValue('capture');
 const CAPTURE_DIR = captureArg
   ? path.resolve(captureArg)
@@ -224,6 +225,14 @@ function showDecoded(addr, parsed) {
   console.log('=> ' + shown);
 }
 
+function requireOnline(command) {
+  if (!OFFLINE) return;
+  throw new Error(
+    command.toUpperCase() +
+    ' is unavailable in offline mode. Restart without "--offline" and connect a powered-on bike.'
+  );
+}
+
 function requireActive(command) {
   if (ACTIVE) return;
   throw new Error(
@@ -244,6 +253,7 @@ function recordConsoleCommand(cmd, extra = {}) {
 }
 
 async function doRead(cmd) {
+  requireOnline('read');
   const { address, entry } = resolveAddress(cmd.target, ADDRESS_REGISTRY);
   const seq = nextSeq();
   const frame = buildReadRequestFrame(address, seq);
@@ -259,6 +269,7 @@ async function doRead(cmd) {
 }
 
 async function doWrite(cmd) {
+  requireOnline('write');
   requireActive('write');
   const { address, entry } = resolveAddress(cmd.target, ADDRESS_REGISTRY);
   const payload = parseHexBytes(cmd.payloadText);
@@ -277,6 +288,7 @@ async function doWrite(cmd) {
 }
 
 async function doRpc(cmd) {
+  requireOnline('rpc');
   requireActive('rpc');
   const { address, entry } = resolveAddress(cmd.target, ADDRESS_REGISTRY);
   const payload = parseHexBytes(cmd.payloadText || '');
@@ -298,6 +310,7 @@ async function doRpc(cmd) {
 }
 
 async function doRaw(cmd) {
+  requireOnline('raw');
   requireActive('raw');
   const frame = parseHexBytes(cmd.payloadText);
   if (!frame.length) throw new Error('RAW frame is empty.');
@@ -351,9 +364,12 @@ Examples:
   write 0x2183 "08 01"
   raw "30 07 0e 10 90 85 48 08 04"
 
-The capture is always lossless and remains the source of truth. Safe mode permits
+Online captures are lossless and remain the source of truth. Safe mode permits
 READ plus passive RX capture. --active is intentionally required for commands
 that may change state; arbitrary RPCs can be mutating too.
+
+Offline UI test mode:
+  npm run console -- --offline             Registry/help/TAB completion, no USB
 `.trim());
 }
 
@@ -371,11 +387,16 @@ async function handleCommand(line) {
   if (cmd.command === 'raw') return doRaw(cmd);
   if (cmd.command === 'find') return showFind(cmd);
   if (cmd.command === 'status') {
-    console.log('Capture: ' + CAPTURE_DIR);
-    console.log('Mode: ' + (ACTIVE ? 'ACTIVE (RPC/WRITE/RAW enabled)' : 'safe/read-only'));
+    console.log('Capture: ' + (OFFLINE ? 'disabled (offline mode)' : CAPTURE_DIR));
+    console.log(
+      'Mode: ' +
+      (OFFLINE ? 'OFFLINE (registry/help/TAB only)' :
+        ACTIVE ? 'ACTIVE (RPC/WRITE/RAW enabled)' : 'safe/read-only')
+    );
     return;
   }
   if (cmd.command === 'listen') {
+    requireOnline('listen');
     if (!Number.isFinite(cmd.seconds) || cmd.seconds <= 0 || cmd.seconds > 3600) {
       throw new Error('listen seconds must be > 0 and <= 3600.');
     }
@@ -428,26 +449,37 @@ async function shutdown() {
 }
 
 async function main() {
-  const device = findDevice();
-  if (!device) {
-    throw new Error('No Bosch Smart System USB device found. Connect USB-C and power the bike on.');
+  if (!OFFLINE) {
+    const device = findDevice();
+    if (!device) {
+      throw new Error('No Bosch Smart System USB device found. Connect USB-C and power the bike on, or use --offline to test the console UI.');
+    }
+
+    capture = new UsbCaptureSession(CAPTURE_DIR, {
+      tool: 'node/console.js',
+      mode: ACTIVE ? 'interactive-active' : 'interactive-safe',
+    });
+
+    transport = new Bes3UsbTransport(device, { capture });
+    await transport.open();
   }
 
-  capture = new UsbCaptureSession(CAPTURE_DIR, {
-    tool: 'node/console.js',
-    mode: ACTIVE ? 'interactive-active' : 'interactive-safe',
-  });
-
-  transport = new Bes3UsbTransport(device, { capture });
-  await transport.open();
-
   console.log('BES3 research console');
-  console.log('Capture: ' + CAPTURE_DIR);
-  console.log('Mode: ' + (ACTIVE ? 'ACTIVE — RPC/WRITE/RAW enabled' : 'safe/read-only'));
+  console.log('Capture: ' + (OFFLINE ? 'disabled (offline mode)' : CAPTURE_DIR));
+  console.log(
+    'Mode: ' +
+    (OFFLINE ? 'OFFLINE — registry/help/TAB completion only' :
+      ACTIVE ? 'ACTIVE — RPC/WRITE/RAW enabled' : 'safe/read-only')
+  );
+  if (OFFLINE && ACTIVE) {
+    console.log('Note: --active has no effect while --offline is enabled.');
+  }
   console.log('Type "help" for commands. Press TAB for context-aware suggestions.');
 
-  rxPromise = rxPump();
-  startKeepAlive();
+  if (!OFFLINE) {
+    rxPromise = rxPump();
+    startKeepAlive();
+  }
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -476,7 +508,7 @@ async function main() {
   }
 
   await shutdown();
-  console.log('Capture closed: ' + CAPTURE_DIR);
+  console.log(OFFLINE ? 'Offline console closed.' : 'Capture closed: ' + CAPTURE_DIR);
 }
 
 main().catch(async (err) => {
