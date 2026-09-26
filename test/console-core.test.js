@@ -9,6 +9,9 @@ const {
   resolveAddress,
   parseCommand,
   findRegistryEntries,
+  completeTarget,
+  completeFind,
+  createCompleter,
 } = require('../node/console-core');
 
 const registry = {
@@ -60,4 +63,40 @@ test('findRegistryEntries searches component/name/address text', () => {
   assert.equal(findRegistryEntries('maximum_assistance', registry).length, 1);
   assert.equal(findRegistryEntries('0x2183', registry)[0].name, 'TIME_FORMAT');
   assert.equal(formatAddress(0x1085), '0x1085');
+});
+
+
+test('read completion prefers components then readable datapoints', () => {
+  assert.deepEqual(completeTarget('read', 'Rem', registry), ['RemoteControl.']);
+  assert.deepEqual(
+    completeTarget('read', 'RemoteControl.', registry),
+    ['RemoteControl.TIME_FORMAT']
+  );
+});
+
+test('write completion only offers writable registry entries', () => {
+  assert.deepEqual(completeTarget('write', 'Rem', registry), ['RemoteControl.']);
+  assert.deepEqual(
+    completeTarget('write', 'RemoteControl.', registry),
+    ['RemoteControl.TIME_FORMAT']
+  );
+  assert.deepEqual(completeTarget('write', 'Drive', registry), []);
+});
+
+test('find completion suggests components, names, and substring matches', () => {
+  assert.ok(completeFind('', registry).includes('DriveUnit'));
+  assert.ok(completeFind('MAX', registry).includes('MAXIMUM_ASSISTANCE_SPEED'));
+  assert.ok(completeFind('assist', registry).includes('MAXIMUM_ASSISTANCE_SPEED'));
+});
+
+test('readline completer is context aware', () => {
+  const completer = createCompleter(registry);
+
+  assert.deepEqual(completer('re'), [['read'], 're']);
+  assert.deepEqual(completer('read Rem'), [['RemoteControl.'], 'Rem']);
+  assert.deepEqual(completer('write Rem'), [['RemoteControl.'], 'Rem']);
+
+  const [findHits, findFragment] = completer('find assist');
+  assert.equal(findFragment, 'assist');
+  assert.ok(findHits.includes('MAXIMUM_ASSISTANCE_SPEED'));
 });
