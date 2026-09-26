@@ -43,6 +43,15 @@ Safe mode is the default:
     cd node
     npm run console
 
+Without a bike, start the offline UI mode to test registry lookup, help, and
+TAB completion without USB, RX, keep-alive, or capture:
+
+    npm run console:offline
+
+Equivalent:
+
+    npm run console -- --offline
+
 Useful commands:
 
     read RemoteControl.TIME_FORMAT
@@ -63,8 +72,9 @@ Then commands such as these become available:
     write 0x2183 "08 01"
     raw "30 07 0e 10 90 85 48 08 04"
 
-The console itself always creates a capture under `local-captures/<timestamp>/`.
+Online console sessions create a capture under `local-captures/<timestamp>/`.
 Use `--capture=../my-private-session` to choose a different directory.
+Offline mode does not create a capture.
 
 Active mode is deliberately opt-in because a generic RPC is not necessarily
 read-only. The console does not attempt to decide whether an arbitrary RPC or raw
