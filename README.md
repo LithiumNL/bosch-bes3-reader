@@ -170,6 +170,19 @@ node ../tools/explain-frame.js --direction=tx "30 07 0e 10 90 85 48 08 04"
 
 See [docs/raw-capture.md](docs/raw-capture.md) for the format and privacy notes.
 
+A controlled persistence experiment is included at `experiments/bes3-usb-experiment.js`.
+It snapshots important speed/region/tuning/issue state, uses only `TIME_FORMAT`
+as the benign WRITE control, supports manual power-cycle checkpoints, and can
+run the read-only logical `0x1085` Information Manager command-4/5 probe. The
+whole USB session is captured through the lossless transport layer.
+
+```bash
+cd node
+npm run experiment:usb
+# optional full readable-registry sweeps:
+npm run experiment:usb -- --full
+```
+
 ## Development / repo hygiene
 
 This is a **public** repo — keep bike-specific and personal data out of it

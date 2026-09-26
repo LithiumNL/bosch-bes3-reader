@@ -123,7 +123,7 @@ class Bes3UsbTransport {
     }
   }
 
-  open() {
+  async open() {
     this.device.open();
     this.iface = this.device.interface(0);
 
@@ -161,6 +161,50 @@ class Bes3UsbTransport {
         endpoint_out: this.epOut.address,
       },
       privacy_note: 'USB string descriptors are intentionally not queried by the capture layer.',
+    });
+
+    // The BRC3600 / LED Remote exposes a USB<->serial bridge. The stock Bosch
+    // tool and the working WebUSB transport initialise it before MessageBus
+    // traffic. Without this sequence, bulk OUT can ACK locally while frames
+    // never reach the bike bus, causing an all-timeout sweep.
+    await this.init();
+  }
+
+  async init() {
+    const cfg = Buffer.from([0x00, 0x80, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00]);
+
+    await this._controlTransfer(BM_VENDOR_IFACE_IN, 0x01, 0, 0, 1, 'BRIDGE_STATUS');
+    await this._controlTransfer(BM_VENDOR_IFACE_OUT, 0x00, 0, 0, Buffer.alloc(0), 'BRIDGE_INIT_00');
+    await this._controlTransfer(BM_VENDOR_IFACE_OUT, 0x43, 0, 0, cfg, 'BRIDGE_CONFIG_43');
+    await this._controlTransfer(BM_VENDOR_IFACE_OUT, 0x23, 0, 0, cfg, 'BRIDGE_CONFIG_23');
+    await this._controlTransfer(BM_VENDOR_IFACE_OUT, 0x41, 0, 0, Buffer.alloc(0), 'BRIDGE_INIT_41');
+    await this._controlTransfer(BM_VENDOR_IFACE_OUT, 0x21, 0, 0, Buffer.alloc(0), 'BRIDGE_INIT_21');
+
+    // MCSP session setup. Replies are drained so they cannot be mistaken for a
+    // later datapoint response. The capture layer still retains every TX/RX.
+    const handshake = [
+      [0x10, 0x02, 0x01, 0x03],
+      [0x10, 0x03, 0x04, 0x04, 0x00],
+      [0x10, 0x06, 0x02, 0x01, 0x00, 0x10, 0x00, 0x00],
+      [0x10, 0x06, 0x02, 0x02, 0x00, 0x10, 0x00, 0x00],
+      [0x10, 0x06, 0x02, 0x03, 0x00, 0x10, 0x00, 0x00],
+      [0x10, 0x06, 0x02, 0x04, 0x00, 0x00, 0x00, 0x00],
+      [0x10, 0x06, 0x02, 0x05, 0x00, 0x00, 0x00, 0x00],
+      [0x10, 0x06, 0x02, 0x06, 0x00, 0x00, 0x00, 0x00],
+      [0x10, 0x06, 0x02, 0x07, 0x00, 0x00, 0x00, 0x00],
+    ];
+
+    for (const frame of handshake) {
+      await this.doMcspWrite(Buffer.from(frame));
+      for (let i = 0; i < 4; i++) {
+        if (!(await this.readNextFrame(2, 3))) break;
+      }
+    }
+
+    this._record({
+      layer: 'session',
+      event: 'bridge-init-complete',
+      direction: 'local',
     });
   }
 

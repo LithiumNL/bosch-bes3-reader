@@ -88,7 +88,7 @@ async function main() {
   if (capture) console.log('Raw USB capture: ' + captureDir);
 
   const transport = new Bes3UsbTransport(device, { capture });
-  transport.open();
+  await transport.open();
 
   let keepAliveSeq = 0;
   const keepAliveTimer = setInterval(() => {
