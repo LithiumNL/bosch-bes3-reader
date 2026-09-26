@@ -26,6 +26,7 @@ const {
   resolveAddress,
   parseCommand,
   findRegistryEntries,
+  createCompleter,
 } = require('./console-core');
 
 const KEEP_ALIVE_ADDR = 0x2106;
@@ -336,6 +337,12 @@ Commands:
   help                                    Show this help
   quit                                    Close capture and USB session
 
+TAB completion:
+  re<TAB>                                  Completes command names
+  read Rem<TAB>                            Completes components/datapoints
+  write Rem<TAB>                           Shows writable targets only
+  find speed<TAB>                          Suggests matching names/components
+
 Examples:
   read 0x2183
   read RemoteControl.TIME_FORMAT
@@ -437,7 +444,7 @@ async function main() {
   console.log('BES3 research console');
   console.log('Capture: ' + CAPTURE_DIR);
   console.log('Mode: ' + (ACTIVE ? 'ACTIVE — RPC/WRITE/RAW enabled' : 'safe/read-only'));
-  console.log('Type "help" for commands.');
+  console.log('Type "help" for commands. Press TAB for context-aware suggestions.');
 
   rxPromise = rxPump();
   startKeepAlive();
@@ -447,6 +454,7 @@ async function main() {
     output: process.stdout,
     terminal: true,
     prompt: 'bes3> ',
+    completer: createCompleter(ADDRESS_REGISTRY),
   });
 
   const stop = () => {
