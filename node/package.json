@@ -16,6 +16,7 @@
     "explain-frame": "node ../tools/explain-frame.js",
     "replay-capture": "node ../tools/replay-capture.js",
     "experiment:usb": "node ../experiments/bes3-usb-experiment.js",
-    "console": "node console.js"
+    "console": "node console.js",
+    "console:offline": "node console.js --offline"
   }
 }
