@@ -12,7 +12,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "test": "node --test ../test/*.test.js",
+    "test": "node --test ../test/frame-inspector.test.js ../test/usb-capture.test.js",
     "explain-frame": "node ../tools/explain-frame.js",
     "replay-capture": "node ../tools/replay-capture.js"
   }
