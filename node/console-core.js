@@ -145,10 +145,133 @@ function findRegistryEntries(query, registry, limit = 20) {
     .slice(0, limit);
 }
 
+
+const COMMAND_COMPLETIONS = [
+  'read',
+  'find',
+  'listen',
+  'capture',
+  'help',
+  'quit',
+  'rpc',
+  'write',
+  'raw',
+];
+
+function uniqueSorted(values) {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+}
+
+function entriesForTargetCommand(command, registry) {
+  const addresses = registry && Array.isArray(registry.addresses) ? registry.addresses : [];
+
+  if (command === 'read' || command === 'r') {
+    return addresses.filter((e) => e.readable === true);
+  }
+  if (command === 'write' || command === 'w') {
+    return addresses.filter((e) => e.writable === true);
+  }
+  if (command === 'rpc') {
+    return addresses;
+  }
+  return [];
+}
+
+function completeTarget(command, fragment, registry) {
+  const entries = entriesForTargetCommand(command, registry);
+  const text = String(fragment || '');
+  const lower = text.toLowerCase();
+
+  // Complete component names first while there is no dot. This avoids dumping
+  // hundreds of datapoints when the user has only typed "read " or "write ".
+  if (!text.includes('.')) {
+    const componentHits = uniqueSorted(entries.map((e) => e.component + '.'))
+      .filter((value) => value.toLowerCase().startsWith(lower));
+
+    if (componentHits.length) return componentHits;
+
+    // If the user starts typing a datapoint name directly, still help.
+    return uniqueSorted(
+      entries
+        .filter((e) => String(e.name).toLowerCase().startsWith(lower))
+        .map((e) => e.component + '.' + e.name)
+    );
+  }
+
+  return uniqueSorted(
+    entries
+      .map((e) => e.component + '.' + e.name)
+      .filter((value) => value.toLowerCase().startsWith(lower))
+  );
+}
+
+function completeFind(fragment, registry) {
+  const addresses = registry && Array.isArray(registry.addresses) ? registry.addresses : [];
+  const text = String(fragment || '');
+  const lower = text.toLowerCase();
+
+  const candidates = uniqueSorted([
+    ...addresses.map((e) => e.component),
+    ...addresses.map((e) => e.name),
+    ...addresses.map((e) => e.component + '.' + e.name),
+  ]);
+
+  if (!text) {
+    // An empty "find " would otherwise produce a huge list. Components are the
+    // most useful first-level suggestions.
+    return uniqueSorted(addresses.map((e) => e.component));
+  }
+
+  const startsWith = candidates.filter((value) => value.toLowerCase().startsWith(lower));
+  if (startsWith.length) return startsWith;
+
+  // find is intentionally looser than read/write completion: it is a search
+  // command, so substring suggestions are useful here.
+  return candidates.filter((value) => value.toLowerCase().includes(lower));
+}
+
+function createCompleter(registry) {
+  return function completer(line) {
+    const input = String(line || '');
+    const leftTrimmed = input.replace(/^\s+/, '');
+
+    // Command completion.
+    if (!leftTrimmed.includes(' ')) {
+      const fragment = leftTrimmed.toLowerCase();
+      const hits = COMMAND_COMPLETIONS.filter((cmd) => cmd.startsWith(fragment));
+      return [hits.length ? hits : COMMAND_COMPLETIONS, leftTrimmed];
+    }
+
+    const firstSpace = leftTrimmed.indexOf(' ');
+    const command = leftTrimmed.slice(0, firstSpace).toLowerCase();
+    const rest = leftTrimmed.slice(firstSpace + 1);
+
+    if (command === 'read' || command === 'r' ||
+        command === 'write' || command === 'w' ||
+        command === 'rpc') {
+      // Only the first argument is a registry target. Once a payload starts,
+      // do not suggest anything.
+      if (/\s/.test(rest.trim())) return [[], rest];
+      const hits = completeTarget(command, rest, registry);
+      return [hits, rest];
+    }
+
+    if (command === 'find' || command === 'registry') {
+      const hits = completeFind(rest, registry);
+      return [hits, rest];
+    }
+
+    return [[], rest];
+  };
+}
+
 module.exports = {
   parseHexBytes,
   formatAddress,
   resolveAddress,
   parseCommand,
   findRegistryEntries,
+  completeTarget,
+  completeFind,
+  createCompleter,
 };
