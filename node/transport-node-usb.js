@@ -1,29 +1,43 @@
-// Node-specific USB transport (uses the `usb` npm package, libusb-backed).
-// Implements the MCSP framing over vendor control + bulk transfers. This is
-// the ONLY file that should need changing for a browser/WebUSB port —
-// protocol.js and addresses.js are transport-agnostic.
+// Node-specific USB transport (uses the usb npm package, libusb-backed).
+// Implements MCSP framing over vendor control + bulk transfers.
+//
+// Optional lossless capture:
+//   new Bes3UsbTransport(device, { capture: UsbCaptureSession })
+//
+// Every user-space-visible USB transaction and unmodified MCSP frame is logged
+// before semantic decoding, so old sessions can be replayed later.
+
+'use strict';
 
 const usb = require('usb');
 
-const VENDOR_ID = 0x108c; // Bosch
-const PRODUCT_IDS = [448, 452, 454, 462]; // Smart System "system controller" PIDs
-const EP_IN = 3;   // bulk IN endpoint number
-const EP_OUT = 4;  // bulk OUT endpoint number
+const VENDOR_ID = 0x108c;
+const PRODUCT_IDS = [448, 452, 454, 462];
+const EP_IN = 3;
+const EP_OUT = 4;
 
-// Vendor-class, interface-recipient control requests (see RESEARCH.md).
-const REQ_GET_IN_STATE = 0x44;   // IN, 7 bytes: poll pending-read length
-const REQ_SET_IN_DONE = 0x45;    // OUT, empty: ack a completed read
-const REQ_GET_OUT_STATE = 0x47;  // IN, 3 bytes: poll write ACK/status
-const REQ_SET_OUT_SIZE = 0x48;   // OUT, 4 bytes LE: announce upcoming write length
+const REQ_GET_IN_STATE = 0x44;
+const REQ_SET_IN_DONE = 0x45;
+const REQ_GET_OUT_STATE = 0x47;
+const REQ_SET_OUT_SIZE = 0x48;
 
-const BM_VENDOR_IFACE_OUT = 0x41; // dir=host->device, type=vendor, recipient=interface
-const BM_VENDOR_IFACE_IN = 0xc1;  // dir=device->host, type=vendor, recipient=interface
+const BM_VENDOR_IFACE_OUT = 0x41;
+const BM_VENDOR_IFACE_IN = 0xc1;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function controlTransfer(device, bmRequestType, bRequest, wValue, wIndex, dataOrLength) {
+function hexByte(n) {
+  return '0x' + Number(n).toString(16).padStart(2, '0');
+}
+
+function toHex(data) {
+  if (data == null) return null;
+  return Buffer.from(data).toString('hex').match(/.{1,2}/g)?.join(' ') || '';
+}
+
+function rawControlTransfer(device, bmRequestType, bRequest, wValue, wIndex, dataOrLength) {
   return new Promise((resolve, reject) => {
     device.controlTransfer(bmRequestType, bRequest, wValue, wIndex, dataOrLength, (err, data) => {
       if (err) reject(err);
@@ -34,24 +48,85 @@ function controlTransfer(device, bmRequestType, bRequest, wValue, wIndex, dataOr
 
 function findDevice() {
   const devices = usb.getDeviceList();
-  const match = devices.find(
+  return devices.find(
     (d) => d.deviceDescriptor.idVendor === VENDOR_ID && PRODUCT_IDS.includes(d.deviceDescriptor.idProduct)
-  );
-  if (!match) return null;
-  return match;
+  ) || null;
 }
 
 class Bes3UsbTransport {
-  constructor(device) {
+  constructor(device, options = {}) {
     this.device = device;
     this.iface = null;
     this.epIn = null;
     this.epOut = null;
+    this.capture = options.capture || null;
+  }
+
+  _record(event) {
+    if (!this.capture || typeof this.capture.record !== 'function') return;
+    try {
+      this.capture.record(event);
+    } catch (_) {
+      // Logging must never interfere with bike communication.
+    }
+  }
+
+  async _controlTransfer(bmRequestType, bRequest, wValue, wIndex, dataOrLength, label) {
+    const isIn = !!(bmRequestType & 0x80);
+    const outData = !isIn && Buffer.isBuffer(dataOrLength) ? dataOrLength : null;
+    const requestedLength = isIn && typeof dataOrLength === 'number' ? dataOrLength : null;
+
+    this._record({
+      layer: 'usb-control',
+      event: 'submit',
+      direction: 'host->bike',
+      label: label || null,
+      bm_request_type: hexByte(bmRequestType),
+      b_request: hexByte(bRequest),
+      w_value: wValue,
+      w_index: wIndex,
+      requested_length: requestedLength,
+      data_hex: outData ? toHex(outData) : null,
+      data_length: outData ? outData.length : null,
+    });
+
+    try {
+      const data = await rawControlTransfer(
+        this.device, bmRequestType, bRequest, wValue, wIndex, dataOrLength
+      );
+
+      this._record({
+        layer: 'usb-control',
+        event: 'complete',
+        direction: isIn ? 'bike->host' : 'host->bike',
+        label: label || null,
+        bm_request_type: hexByte(bmRequestType),
+        b_request: hexByte(bRequest),
+        status: 'ok',
+        data_hex: data ? toHex(data) : null,
+        data_length: data ? data.length : 0,
+      });
+
+      return data;
+    } catch (err) {
+      this._record({
+        layer: 'usb-control',
+        event: 'complete',
+        direction: isIn ? 'bike->host' : 'host->bike',
+        label: label || null,
+        bm_request_type: hexByte(bmRequestType),
+        b_request: hexByte(bRequest),
+        status: 'error',
+        error: err && err.message ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   open() {
     this.device.open();
     this.iface = this.device.interface(0);
+
     try {
       this.iface.claim();
     } catch (e) {
@@ -62,14 +137,36 @@ class Bes3UsbTransport {
         throw e;
       }
     }
-    this.epOut = this.iface.endpoints.find((e) => e.address === EP_OUT || e.address === (EP_OUT | 0x00));
+
+    this.epOut = this.iface.endpoints.find(
+      (e) => e.address === EP_OUT || e.address === (EP_OUT | 0x00)
+    );
     this.epIn = this.iface.endpoints.find((e) => e.address === (EP_IN | 0x80));
+
     if (!this.epIn || !this.epOut) {
-      throw new Error(`Could not find expected bulk endpoints (in=${EP_IN}, out=${EP_OUT})`);
+      throw new Error('Could not find expected bulk endpoints (in=' + EP_IN + ', out=' + EP_OUT + ')');
     }
+
+    const d = this.device.deviceDescriptor || {};
+    this._record({
+      layer: 'session',
+      event: 'usb-open',
+      direction: 'local',
+      usb: {
+        vendor_id: d.idVendor,
+        product_id: d.idProduct,
+        bcd_device: d.bcdDevice,
+        interface: 0,
+        endpoint_in: this.epIn.address,
+        endpoint_out: this.epOut.address,
+      },
+      privacy_note: 'USB string descriptors are intentionally not queried by the capture layer.',
+    });
   }
 
   close() {
+    this._record({ layer: 'session', event: 'usb-close', direction: 'local' });
+
     try {
       this.iface.release(true, () => {
         try {
@@ -80,67 +177,175 @@ class Bes3UsbTransport {
   }
 
   bulkOut(data) {
+    const bytes = Buffer.from(data);
+
+    this._record({
+      layer: 'usb-bulk',
+      event: 'transfer',
+      direction: 'host->bike',
+      endpoint: hexByte(this.epOut.address),
+      data_length: bytes.length,
+      data_hex: toHex(bytes),
+    });
+
     return new Promise((resolve, reject) => {
-      this.epOut.transfer(Buffer.from(data), (err) => (err ? reject(err) : resolve()));
+      this.epOut.transfer(bytes, (err) => {
+        if (err) {
+          this._record({
+            layer: 'usb-bulk',
+            event: 'result',
+            direction: 'host->bike',
+            endpoint: hexByte(this.epOut.address),
+            status: 'error',
+            error: err.message,
+          });
+          reject(err);
+        } else {
+          this._record({
+            layer: 'usb-bulk',
+            event: 'result',
+            direction: 'host->bike',
+            endpoint: hexByte(this.epOut.address),
+            status: 'ok',
+          });
+          resolve();
+        }
+      });
     });
   }
 
   bulkIn(length) {
+    this._record({
+      layer: 'usb-bulk',
+      event: 'request',
+      direction: 'host->bike',
+      endpoint: hexByte(this.epIn.address),
+      requested_length: length,
+    });
+
     return new Promise((resolve, reject) => {
-      this.epIn.transfer(length, (err, data) => (err ? reject(err) : resolve(data)));
+      this.epIn.transfer(length, (err, data) => {
+        if (err) {
+          this._record({
+            layer: 'usb-bulk',
+            event: 'transfer',
+            direction: 'bike->host',
+            endpoint: hexByte(this.epIn.address),
+            status: 'error',
+            error: err.message,
+          });
+          reject(err);
+        } else {
+          this._record({
+            layer: 'usb-bulk',
+            event: 'transfer',
+            direction: 'bike->host',
+            endpoint: hexByte(this.epIn.address),
+            status: 'ok',
+            data_length: data ? data.length : 0,
+            data_hex: data ? toHex(data) : null,
+          });
+          resolve(data);
+        }
+      });
     });
   }
 
   async doMcspWrite(payload) {
+    const mcsp = Buffer.from(payload);
+
+    this._record({
+      layer: 'mcsp',
+      event: 'frame',
+      direction: 'host->bike',
+      data_length: mcsp.length,
+      raw_hex: toHex(mcsp),
+    });
+
     const lengthBuf = Buffer.alloc(4);
     lengthBuf.writeUInt32LE(payload.length, 0);
-    await controlTransfer(this.device, BM_VENDOR_IFACE_OUT, REQ_SET_OUT_SIZE, 0, 0, lengthBuf);
+    await this._controlTransfer(
+      BM_VENDOR_IFACE_OUT, REQ_SET_OUT_SIZE, 0, 0, lengthBuf, 'SET_OUT_SIZE'
+    );
 
     const padding = payload.length % 64;
-    const padded = padding > 0 ? Buffer.concat([Buffer.from(payload), Buffer.alloc(64 - padding)]) : Buffer.from(payload);
+    const padded = padding > 0
+      ? Buffer.concat([mcsp, Buffer.alloc(64 - padding)])
+      : mcsp;
+
     await this.bulkOut(padded);
 
     for (let tries = 0; tries < 10; tries++) {
-      const ack = await controlTransfer(this.device, BM_VENDOR_IFACE_IN, REQ_GET_OUT_STATE, 0, 0, 3);
+      const ack = await this._controlTransfer(
+        BM_VENDOR_IFACE_IN, REQ_GET_OUT_STATE, 0, 0, 3, 'GET_OUT_STATE'
+      );
+
       if (!ack || ack.length < 3) {
         await sleep(20);
         continue;
       }
+
       if (ack[1] === 3) {
-        // busy / transfer still running, retry
         await sleep(20);
         continue;
       }
+
       if (ack[2] !== 0) {
-        throw new Error(`Write error, status byte = ${ack[2]}`);
+        throw new Error('Write error, status byte = ' + ack[2]);
       }
-      return; // success
+
+      return;
     }
+
     throw new Error('Write ACK timeout');
   }
 
-  // Reads and returns the next available MCSP frame, or null if nothing is
-  // pending within the given number of poll attempts.
   async readNextFrame(maxPolls = 50, pollDelayMs = 5) {
     for (let i = 0; i < maxPolls; i++) {
-      const lenBuf = await controlTransfer(this.device, BM_VENDOR_IFACE_IN, REQ_GET_IN_STATE, 0, 0, 7);
+      const lenBuf = await this._controlTransfer(
+        BM_VENDOR_IFACE_IN, REQ_GET_IN_STATE, 0, 0, 7, 'GET_IN_STATE'
+      );
+
       if (!lenBuf || lenBuf.length < 4) {
         await sleep(pollDelayMs);
         continue;
       }
+
       const length = lenBuf.readUInt32LE(0);
+
       if (length === 0) {
         await sleep(pollDelayMs);
         continue;
       }
+
       if (length > 65536) {
+        this._record({
+          layer: 'mcsp',
+          event: 'invalid-length',
+          direction: 'bike->host',
+          length,
+        });
         await sleep(pollDelayMs);
         continue;
       }
+
       const data = await this.bulkIn(length);
-      await controlTransfer(this.device, BM_VENDOR_IFACE_OUT, REQ_SET_IN_DONE, 0, 0, Buffer.alloc(0));
+
+      await this._controlTransfer(
+        BM_VENDOR_IFACE_OUT, REQ_SET_IN_DONE, 0, 0, Buffer.alloc(0), 'SET_IN_DONE'
+      );
+
+      this._record({
+        layer: 'mcsp',
+        event: 'frame',
+        direction: 'bike->host',
+        data_length: data ? data.length : 0,
+        raw_hex: data ? toHex(data) : null,
+      });
+
       return data;
     }
+
     return null;
   }
 }

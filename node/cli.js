@@ -12,7 +12,9 @@
 
 const { buildReadRequestFrame, buildRpcCallFrame, parseReadResponseFrame, decodeValue } = require('../src/protocol');
 const { decodeTyped } = require('../src/messageTypes');
+const path = require('path');
 const { Bes3UsbTransport, findDevice } = require('./transport-node-usb');
+const { UsbCaptureSession, defaultCaptureDirectory } = require('./usb-capture');
 
 // src/addresses.js is retired — the address registry (src/address-registry.json, edited source
 // of truth) is now the single place every address is declared. Reconstructed here into the same
@@ -33,6 +35,16 @@ const KEEP_ALIVE_INTERVAL_MS = 800;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function captureDirectoryFromArgs() {
+  const eq = process.argv.find((a) => a.startsWith('--capture='));
+  if (eq) return path.resolve(eq.slice('--capture='.length));
+  const i = process.argv.indexOf('--capture');
+  if (i === -1) return null;
+  const next = process.argv[i + 1];
+  if (next && !next.startsWith('--')) return path.resolve(next);
+  return defaultCaptureDirectory(path.resolve(__dirname, '..', 'local-captures'));
 }
 
 let seqCounter = 0;
@@ -71,7 +83,11 @@ async function main() {
     process.exit(1);
   }
 
-  const transport = new Bes3UsbTransport(device);
+  const captureDir = captureDirectoryFromArgs();
+  const capture = captureDir ? new UsbCaptureSession(captureDir, { tool: 'node/cli.js', mode: 'read-only-sweep' }) : null;
+  if (capture) console.log('Raw USB capture: ' + captureDir);
+
+  const transport = new Bes3UsbTransport(device, { capture });
   transport.open();
 
   let keepAliveSeq = 0;
@@ -132,6 +148,7 @@ async function main() {
 
   clearInterval(keepAliveTimer);
   transport.close();
+  if (capture) capture.close({ status: 'completed' });
 }
 
 main().catch((err) => {

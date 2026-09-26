@@ -10,5 +10,10 @@
   "dependencies": {
     "usb": "^2.14.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test ../test/*.test.js",
+    "explain-frame": "node ../tools/explain-frame.js",
+    "replay-capture": "node ../tools/replay-capture.js"
+  }
 }

@@ -6,3 +6,9 @@ node_modules/
 # distributed from this repo. The app works fine without it (falls back to
 # raw numeric issue IDs).
 web/data/issues/
+
+# Raw protocol captures are bike-specific/private research data.
+/local-captures/
+/captures/
+*.pcap
+*.pcapng

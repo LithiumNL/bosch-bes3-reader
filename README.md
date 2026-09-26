@@ -143,6 +143,33 @@ drive unit platform, cross-referenced against publicly observable behavior of
 existing tuning/diagnostic tools for the same platform. It is not affiliated
 with or endorsed by Bosch.
 
+
+## Raw USB capture and replay
+
+The Node transport can optionally keep a **lossless local trace** of USB control transfers, bulk transfers, and unmodified MCSP frames. Old sessions can then be replayed through newer decoders without reconnecting the bike.
+
+```bash
+cd node
+npm install
+node cli.js --capture
+```
+
+Captures are written under `local-captures/<timestamp>/` by default and contain `session.json` plus `events.jsonl`. They are ignored by Git because raw traffic can contain bike-specific identifiers.
+
+Replay a session:
+
+```bash
+node ../tools/replay-capture.js ../local-captures/<timestamp>
+```
+
+Explain one frame:
+
+```bash
+node ../tools/explain-frame.js --direction=tx "30 07 0e 10 90 85 48 08 04"
+```
+
+See [docs/raw-capture.md](docs/raw-capture.md) for the format and privacy notes.
+
 ## Development / repo hygiene
 
 This is a **public** repo — keep bike-specific and personal data out of it
