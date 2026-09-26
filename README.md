@@ -143,6 +143,71 @@ drive unit platform, cross-referenced against publicly observable behavior of
 existing tuning/diagnostic tools for the same platform. It is not affiliated
 with or endorsed by Bosch.
 
+
+## Raw USB capture and replay
+
+The Node transport can optionally keep a **lossless local trace** of USB control transfers, bulk transfers, and unmodified MCSP frames. Old sessions can then be replayed through newer decoders without reconnecting the bike.
+
+```bash
+cd node
+npm install
+node cli.js --capture
+```
+
+Captures are written under `local-captures/<timestamp>/` by default and contain `session.json` plus `events.jsonl`. They are ignored by Git because raw traffic can contain bike-specific identifiers.
+
+For interactive research, use the single-process console. It continuously captures RX while READ commands are sent through the same USB transport:
+
+```bash
+cd node
+npm run console
+```
+
+Safe mode is read-only. Explicit active mode enables generic RPC/WRITE/raw transmission:
+
+```bash
+npm run console -- --active
+```
+
+Inside the console:
+
+```text
+read RemoteControl.TIME_FORMAT
+find maximum_assistance
+rpc 0x1085 "08 04"
+write 0x2183 "08 01"
+raw "30 07 0e 10 90 85 48 08 04"
+```
+
+RPC/WRITE/raw are deliberately unavailable unless `--active` was supplied, because arbitrary calls may change bike state. The capture only sees traffic that passes through this Node transport; it is not a passive USB sniffer for another application.
+
+Replay a session:
+
+```bash
+node ../tools/replay-capture.js ../local-captures/<timestamp>
+```
+
+Explain one frame:
+
+```bash
+node ../tools/explain-frame.js --direction=tx "30 07 0e 10 90 85 48 08 04"
+```
+
+See [docs/raw-capture.md](docs/raw-capture.md) for the format and privacy notes.
+
+A controlled persistence experiment is included at `experiments/bes3-usb-experiment.js`.
+It snapshots important speed/region/tuning/issue state, uses only `TIME_FORMAT`
+as the benign WRITE control, supports manual power-cycle checkpoints, and can
+run the read-only logical `0x1085` Information Manager command-4/5 probe. The
+whole USB session is captured through the lossless transport layer.
+
+```bash
+cd node
+npm run experiment:usb
+# optional full readable-registry sweeps:
+npm run experiment:usb -- --full
+```
+
 ## Development / repo hygiene
 
 This is a **public** repo — keep bike-specific and personal data out of it

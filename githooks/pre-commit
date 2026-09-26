@@ -23,7 +23,7 @@ if [ -n "$hits" ]; then
 fi
 
 # 2) Research / capture / handoff files that shouldn't live in the public repo
-names=$(git diff --cached --name-only --diff-filter=AM | grep -iE 'handoff|capture|\.pcap$|-research|field-classification')
+names=$(git diff --cached --name-only --diff-filter=AM | grep -iE '(^|/)(local-captures?|captures?|handoff|private-research)(/|$)|\.(pcap|pcapng)$|field-classification')
 if [ -n "$names" ]; then
   echo "X pre-commit blocked: research/capture-style file(s) in a PUBLIC repo:"
   echo "$names" | sed 's/^/   /'
