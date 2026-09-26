@@ -156,6 +156,31 @@ node cli.js --capture
 
 Captures are written under `local-captures/<timestamp>/` by default and contain `session.json` plus `events.jsonl`. They are ignored by Git because raw traffic can contain bike-specific identifiers.
 
+For interactive research, use the single-process console. It continuously captures RX while READ commands are sent through the same USB transport:
+
+```bash
+cd node
+npm run console
+```
+
+Safe mode is read-only. Explicit active mode enables generic RPC/WRITE/raw transmission:
+
+```bash
+npm run console -- --active
+```
+
+Inside the console:
+
+```text
+read RemoteControl.TIME_FORMAT
+find maximum_assistance
+rpc 0x1085 "08 04"
+write 0x2183 "08 01"
+raw "30 07 0e 10 90 85 48 08 04"
+```
+
+RPC/WRITE/raw are deliberately unavailable unless `--active` was supplied, because arbitrary calls may change bike state. The capture only sees traffic that passes through this Node transport; it is not a passive USB sniffer for another application.
+
 Replay a session:
 
 ```bash
